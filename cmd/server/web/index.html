@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>标本馆自适应基数树（ART）索引</title>
+<style>
+  :root {
+    --bg: #0f1419; --panel: #1a2129; --panel2: #222c37; --line: #2d3a47;
+    --text: #d7e0ea; --muted: #8aa0b4; --accent: #4ea1ff; --green: #54c08a;
+    --amber: #e0a84e; --red: #e06c6c; --purple: #b08ae0;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 14px; line-height: 1.5;
+  }
+  header {
+    padding: 18px 28px; background: var(--panel); border-bottom: 1px solid var(--line);
+  }
+  header h1 { margin: 0 0 4px; font-size: 20px; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  nav { display: flex; gap: 4px; padding: 0 28px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  nav button {
+    background: none; border: none; color: var(--muted); padding: 14px 20px;
+    cursor: pointer; font-size: 14px; border-bottom: 2px solid transparent;
+  }
+  nav button.active { color: var(--accent); border-bottom-color: var(--accent); }
+  main { padding: 24px 28px; max-width: 1200px; margin: 0 auto; }
+  .tab { display: none; }
+  .tab.active { display: block; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 18px 20px; margin-bottom: 18px;
+  }
+  .card h2 { margin: 0 0 14px; font-size: 15px; color: var(--accent); }
+  .toolbar { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
+  input, select, button.ctl {
+    background: var(--panel2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 6px; padding: 8px 12px; font-size: 13px;
+  }
+  button.ctl { cursor: pointer; }
+  button.ctl:hover { border-color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; }
+  td.mono, .mono { font-family: "SF Mono", Menlo, Consolas, monospace; }
+  .pager { display: flex; gap: 10px; align-items: center; margin-top: 14px; color: var(--muted); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+  .metric { background: var(--panel2); border-radius: 8px; padding: 16px; }
+  .metric .label { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+  .metric .value { font-size: 22px; font-weight: 600; }
+  .metric .unit { font-size: 13px; color: var(--muted); font-weight: 400; }
+  .bar-row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+  .bar-row .name { width: 70px; font-family: monospace; }
+  .bar-track { flex: 1; background: var(--panel2); border-radius: 5px; height: 22px; position: relative; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 5px; display: flex; align-items: center; padding-left: 8px; font-size: 12px; min-width: 30px; }
+  .bar-row .meta { width: 180px; color: var(--muted); font-size: 12px; text-align: right; }
+  ul.tree { list-style: none; padding-left: 18px; margin: 0; border-left: 1px dashed var(--line); }
+  ul.tree.root { padding-left: 0; border-left: none; }
+  ul.tree li { padding: 3px 0; position: relative; }
+  .node-line { cursor: pointer; display: inline-flex; gap: 8px; align-items: center; }
+  .node-line:hover { color: var(--accent); }
+  .badge { padding: 1px 7px; border-radius: 10px; font-size: 11px; font-family: monospace; }
+  .b-node4 { background: #2d4a66; color: #9cc8ff; }
+  .b-node16 { background: #2d5a44; color: #9fe6c0; }
+  .b-node48 { background: #5a4a2d; color: #f0d090; }
+  .b-node256 { background: #5a2d4a; color: #e6a0d0; }
+  .b-leaf { background: #3a3a3a; color: #bbb; }
+  .branch { color: var(--amber); font-family: monospace; font-size: 12px; }
+  .prefix { color: var(--purple); font-family: monospace; font-size: 12px; }
+  .leafkey { color: var(--green); font-family: monospace; font-size: 12px; }
+  .muted { color: var(--muted); }
+  .compare-table td:nth-child(2), .compare-table td:nth-child(3) { font-family: monospace; }
+  .hint { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  .loading { color: var(--muted); padding: 20px; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>自然博物馆标本馆 · 自适应基数树（ART）内存索引</h1>
+  <div class="sub">node4 / node16 / node48 / node256 自适应升降级 · 路径压缩 · 懒展开 · 指针最低位标记 · 保序编码</div>
+</header>
+<nav>
+  <button data-tab="keys" class="active">分键浏览</button>
+  <button data-tab="tree">树结构</button>
+  <button data-tab="kinds">节点规格分布</button>
+  <button data-tab="memory">内存占用与耗时</button>
+</nav>
+<main>
+  <!-- 1. 分键浏览 -->
+  <section id="tab-keys" class="tab active">
+    <div class="card">
+      <h2>分键浏览（有序分页 / 前缀过滤）</h2>
+      <div class="toolbar">
+        <input id="prefix-input" placeholder="前缀过滤，如 NHM-PB-0、Ericaceae|、XZ20" style="flex:1;min-width:280px">
+        <button class="ctl" id="prefix-btn">前缀查询</button>
+        <button class="ctl" id="reset-btn">回到开头</button>
+      </div>
+      <table>
+        <thead><tr><th style="width:60px">#</th><th>键（原始字节，UTF-8 展示）</th><th style="width:120px">值大小 (B)</th></tr></thead>
+        <tbody id="keys-body"><tr><td colspan="3" class="loading">加载中…</td></tr></tbody>
+      </table>
+      <div class="pager">
+        <button class="ctl" id="next-btn">下一页 &rarr;</button>
+        <span id="page-info"></span>
+      </div>
+      <div class="hint">分页用键集游标（keyset pagination），前缀模式返回该前缀下前 50 个键。</div>
+    </div>
+  </section>
+
+  <!-- 2. 树结构 -->
+  <section id="tab-tree" class="tab">
+    <div class="card">
+      <h2>树结构</h2>
+      <div class="toolbar">
+        <label class="muted">最大展示深度</label>
+        <select id="depth-sel">
+          <option value="2">2</option><option value="3">3</option>
+          <option value="4" selected>4</option><option value="6">6</option>
+          <option value="-1">不限制（可能很大）</option>
+        </select>
+        <button class="ctl" id="tree-reload">刷新</button>
+      </div>
+      <div id="tree-view" class="loading">加载中…</div>
+      <div class="hint">
+        <span class="badge b-node4">node4</span>
+        <span class="badge b-node16">node16</span>
+        <span class="badge b-node48">node48</span>
+        <span class="badge b-node256">node256</span>
+        <span class="badge b-leaf">leaf</span>
+        ；点击内部节点可折叠/展开。
+      </div>
+    </div>
+  </section>
+
+  <!-- 3. 节点规格分布 -->
+  <section id="tab-kinds" class="tab">
+    <div class="card">
+      <h2>节点规格分布</h2>
+      <div id="kind-bars"></div>
+    </div>
+    <div class="card">
+      <h2>结构概览</h2>
+      <div class="grid" id="kind-metrics"></div>
+    </div>
+  </section>
+
+  <!-- 4. 内存与耗时 -->
+  <section id="tab-memory" class="tab">
+    <div class="card">
+      <h2>内存占用对比</h2>
+      <table class="compare-table">
+        <thead><tr><th>结构</th><th>内存口径</th><th>占用</th><th>每键均摊</th><th>说明</th></tr></thead>
+        <tbody id="memory-body"></tbody>
+      </table>
+    </div>
+    <div class="card">
+      <h2>ART 内存构成</h2>
+      <div id="mem-bars"></div>
+    </div>
+    <div class="card">
+      <h2>耗时（纳秒/操作）</h2>
+      <div class="grid" id="timing-metrics"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const fmtBytes = (b) => {
+  if (b === null || b === undefined) return "-";
+  if (b < 1024) return b + " B";
+  const units = ["KiB","MiB","GiB"];
+  let v = b, i = -1;
+  do { v /= 1024; i++; } while (v >= 1024 && i < units.length-1);
+  return v.toFixed(2) + " " + units[i];
+};
+const esc = (s) => String(s).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+
+// 标签切换
+document.querySelectorAll("nav button").forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll("nav button").forEach(b => b.classList.remove("active"));
+    document.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
+    btn.classList.add("active");
+    $("tab-" + btn.dataset.tab).classList.add("active");
+    if (btn.dataset.tab === "tree") loadTree();
+    if (btn.dataset.tab === "kinds") loadStats();
+    if (btn.dataset.tab === "memory") loadMemory();
+  };
+});
+
+// ---- 分键浏览 ----
+let cursor = "";
+async function loadKeys(isPrefix) {
+  const body = $("keys-body");
+  body.innerHTML = '<tr><td colspan="3" class="loading">加载中…</td></tr>';
+  let url;
+  if (isPrefix) {
+    const p = encodeURIComponent($("prefix-input").value);
+    url = "/api/keys?prefix=" + p;
+  } else {
+    url = "/api/keys?after=" + encodeURIComponent(cursor);
+  }
+  const r = await fetch(url);
+  const d = await r.json();
+  if (!d.keys || d.keys.length === 0) {
+    body.innerHTML = '<tr><td colspan="3" class="muted">没有匹配的键</td></tr>';
+    $("page-info").textContent = "共 " + d.total + " 键";
+    $("next-btn").style.visibility = "hidden";
+    return;
+  }
+  body.innerHTML = d.keys.map((k, i) =>
+    `<tr><td class="muted">${i+1}</td>` +
+    `<td class="mono" title="hex: ${esc(k.hex)}">${esc(k.text)}</td>` +
+    `<td>${k.size}</td></tr>`
+  ).join("");
+  $("page-info").textContent = "全树共 " + d.total + " 键，本页 " + d.keys.length + " 条";
+  if (isPrefix) {
+    $("next-btn").style.visibility = "hidden";
+  } else {
+    cursor = d.next || "";
+    $("next-btn").style.visibility = cursor ? "visible" : "hidden";
+  }
+}
+$("next-btn").onclick = () => loadKeys(false);
+$("prefix-btn").onclick = () => loadKeys(true);
+$("reset-btn").onclick = () => { cursor = ""; $("prefix-input").value = ""; loadKeys(false); };
+$("prefix-input").addEventListener("keydown", e => { if (e.key === "Enter") loadKeys(true); });
+loadKeys(false);
+
+// ---- 树结构 ----
+function renderNode(node) {
+  if (node.kind === "leaf") {
+    return `<li><span class="node-line"><span class="badge b-leaf">leaf</span>
+      <span class="leafkey">${esc(node.keyText)}</span>
+      <span class="muted">(${node.valueSize}B)</span></span></li>`;
+  }
+  const badge = `<span class="badge b-${node.kind}">${node.kind}</span>`;
+  const pref = node.prefixLen > 0
+    ? `<span class="prefix">前缀[${node.prefixLen}]=${esc(node.prefixText)}…</span>` : "";
+  const kids = (node.children || []).map(c =>
+    `<li><ul class="tree"><li><span class="branch">字节 ${esc(c.branchHex)}</span>
+      ${renderNode(c.node).replace(/^<li>|<\/li>$/g, "")}</li></ul></li>`
+  ).join("");
+  return `<li><span class="node-line" onclick="this.parentNode.querySelector(':scope > ul')?.classList.toggle('collapsed')">
+    ${badge} <span class="muted">${node.count} 孩子</span> ${pref}</span>
+    <ul class="tree">${kids}</ul></li>`;
+}
+async function loadTree() {
+  const depth = $("depth-sel").value;
+  const view = $("tree-view");
+  view.className = "loading";
+  view.textContent = "加载中…";
+  const r = await fetch("/api/tree?depth=" + depth);
+  const d = await r.json();
+  view.className = "";
+  view.innerHTML = '<ul class="tree root">' + renderNode(d) + "</ul>";
+}
+$("tree-reload").onclick = loadTree;
+$("depth-sel").onchange = loadTree;
+
+// ---- 节点规格分布 ----
+const kindColors = { node4: "#4ea1ff", node16: "#54c08a", node48: "#e0a84e", node256: "#e06ca0" };
+async function loadStats() {
+  const r = await fetch("/api/stats");
+  const d = await r.json();
+  const maxCount = Math.max(...d.kinds.map(k => k.count), 1);
+  $("kind-bars").innerHTML = d.kinds.map(k => `
+    <div class="bar-row">
+      <span class="name">${k.kind}</span>
+      <div class="bar-track"><div class="bar-fill" style="width:${Math.max(4, k.count/maxCount*100)}%;background:${kindColors[k.kind]}">
+        ${k.count}</div></div>
+      <span class="meta">${k.pct.toFixed(2)}% · ${k.bytesPerNode}B/节点 · ${fmtBytes(k.bytes)}</span>
+    </div>`).join("");
+  const m = [
+    ["内部节点总数", d.innerNodes], ["叶子总数", d.leaves],
+    ["最大深度", d.maxDepth], ["平均叶子深度", d.avgDepth.toFixed(2)],
+  ];
+  $("kind-metrics").innerHTML = m.map(([l,v]) =>
+    `<div class="metric"><div class="label">${l}</div><div class="value">${v}</div></div>`).join("");
+}
+
+// ---- 内存与耗时 ----
+async function loadMemory() {
+  const r = await fetch("/api/memory");
+  const d = await r.json();
+  $("memory-body").innerHTML = `
+    <tr><td><b>ART（解析口径）</b></td><td>节点+叶子头+编码键+值</td><td>${fmtBytes(d.art.totalBytes)}</td><td>${d.art.perKey} B/键</td><td>本库自报，不含分配器碎片</td></tr>
+    <tr><td><b>ART（GC 口径）</b></td><td>运行时堆增量</td><td>${fmtBytes(d.art.heapBytes)}</td><td>—</td><td>含碎片与 span 元数据</td></tr>
+    <tr><td>map（GC 口径）</td><td>运行时堆增量</td><td>${fmtBytes(d.map.heapBytes)}</td><td>${d.map.perKey} B/键</td><td>无序，不能做前缀范围</td></tr>
+    <tr><td>有序切片（估算）</td><td>解析口径外推</td><td>${fmtBytes(d.sortedSlice.estimatedBytes)}</td><td>—</td><td>${esc(d.sortedSlice.note)}</td></tr>`;
+  const parts = [
+    ["内部节点结构", d.art.innerBytes, "#4ea1ff"],
+    ["叶子结构头", d.art.leafHdrBytes, "#54c08a"],
+    ["编码键（含转义/结束符）", d.art.keyBytesEnc, "#e0a84e"],
+    ["值负载", d.art.valueBytes, "#b08ae0"],
+  ];
+  const total = parts.reduce((s,p) => s+p[1], 0);
+  $("mem-bars").innerHTML = parts.map(([name, bytes, color]) => `
+    <div class="bar-row"><span class="name" style="width:160px">${name}</span>
+      <div class="bar-track"><div class="bar-fill" style="width:${Math.max(3, bytes/total*100)}%;background:${color}">
+        ${fmtBytes(bytes)}</div></div>
+      <span class="meta">${(bytes/total*100).toFixed(1)}%</span></div>`).join("") +
+    `<div class="hint">原始用户键共 ${fmtBytes(d.art.keyBytesRaw)}，编码后 ${fmtBytes(d.art.keyBytesEnc)}（转义+结束符开销）。</div>`;
+  const t = d.timings;
+  $("timing-metrics").innerHTML = [
+    ["构建（均摊）", t.buildNs + " ns/键"],
+    ["随机点查", t.getNs + " ns/次"],
+    ["前缀范围遍历", fmtBytes(t.prefixNs).replace("B","") + " ns/次"],
+  ].map(([l,v]) => `<div class="metric"><div class="label">${l}</div><div class="value" style="font-size:18px">${v}</div></div>`).join("");
+}
+loadStats(); loadMemory();
+</script>
+</body>
+</html>
